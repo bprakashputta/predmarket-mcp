@@ -375,6 +375,12 @@ function drawChart(slot, p) {
 
 // ---------- refused look-alikes ----------
 const KINDS = [
+  [/^different dates: (.*)$/, "Date", (m) => m[1]],
+  [/^different timing: (.*)$/, "Timing", (m) => m[1]],
+  [/^different period: (.*)$/, "Period", (m) => m[1]],
+  [/^different place: (.*)$/, "Place", (m) => m[1]],
+  [/^different stage: (.*)$/, "Stage", (m) => m[1]],
+  [/^narrower on one side: (.*)$/, "Scope", (m) => m[1] + " on one side only"],
   [/^different threshold: (.*)$/, "Threshold", (m) => m[1]],
   [/^threshold on one side only: (.*)$/, "Threshold", (m) => m[1] + " on one side only"],
   [/^different comparison: (.*)$/, "Comparison", (m) => m[1]],
@@ -382,19 +388,29 @@ const KINDS = [
   [/^opposite direction: (.*)$/, "Direction", (m) => m[1]],
   [/^negated on one side only/, "Negation", () => "one side says no / not"],
   [/^only names or dates/, "Subject", () => "shares only names and dates"],
+  [/^closes (.*)$/, "Close", (m) => "closes " + m[1]],
 ];
 function parseReason(r) {
   for (const [rx, kind, fmt] of KINDS) { const m = r.match(rx); if (m) return { kind, detail: fmt(m) }; }
   return { kind: "Rule", detail: r };
 }
 const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// underline the words the rule tripped on (thresholds, years, cut/hike), so the eye finds the difference
-function marked(title, detail) {
-  const terms = detail.split(/[\s,]+|vs/).map((w) => w.trim()).filter((w) => w.length > 1 && !/^(on|one|side|only|says|no|not|exactly|shares|names|and|dates)$/i.test(w));
+const SKIP = /^(on|one|side|only|says|no|not|exactly|shares|names|and|dates|a|date|by|before|quarter|implied|days?|apart|left|limit|closes|with|vs)$/i;
+const MONTH3 = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$/i;
+// underline the words the rule tripped on (dates, thresholds, places, stages), so the eye
+// finds the difference; terms only match whole words, so "13" never lights up inside "2013"
+function marked(title, kind, detail) {
+  if (kind === "Timing" || kind === "Close" || kind === "Subject" || kind === "Negation") return [title];
+  const terms = [...new Set(detail.replace(/[(),]/g, " ").split(/\s+/).filter((w) => w.length > 1 && !SKIP.test(w)))];
   if (!terms.length) return [title];
-  const rx = new RegExp("(" + terms.map((w) => escapeRx(w.replace(/bps$/, "")) + (w.endsWith("bps") ? "\\s?bps" : "")).join("|") + ")", "gi");
-  const parts = title.split(rx);
-  return parts.map((s, i) => (i % 2 ? el("mark", { text: s }) : s));
+  const alts = terms.map((w) => {
+    let core = MONTH3.test(w) ? escapeRx(w) + "[a-z]*" : w.endsWith("bps") ? escapeRx(w.slice(0, -3)) + "\\s?bps" : escapeRx(w);
+    if (/^\w/.test(w)) core = "(?<![\\w.,])" + core;
+    if (/\w$/.test(w)) core += "(?![\\w])";
+    return core;
+  });
+  const rx = new RegExp("(" + alts.join("|") + ")", "gi");
+  return title.split(rx).map((s, i) => (i % 2 ? el("mark", { text: s }) : s));
 }
 function renderRefused(d) {
   const tb = $("#refused-table tbody");
@@ -405,7 +421,7 @@ function renderRefused(d) {
   tb.replaceChildren(...d.rejected.map((n) => {
     const { kind, detail } = parseReason(n.reason);
     const cell = (v) => el("td", { class: "diff" }, el("i", { class: "dot " + v.cls, "aria-hidden": "true" }), el("span", { class: "sr-only", text: v.name + ": " }),
-      n[v.key].url ? el("a", { href: n[v.key].url, target: "_blank", rel: "noopener" }, ...marked(n[v.key].title, detail)) : el("span", {}, ...marked(n[v.key].title, detail)));
+      n[v.key].url ? el("a", { href: n[v.key].url, target: "_blank", rel: "noopener" }, ...marked(n[v.key].title, kind, detail)) : el("span", {}, ...marked(n[v.key].title, kind, detail)));
     return el("tr", {}, cell(VENUES[0]), cell(VENUES[1]),
       el("td", {}, el("div", { class: "why" }, el("span", { class: "chip", title: n.reason }, el("b", { text: kind }), el("span", { text: detail })))),
       el("td", { class: "num", text: Math.round(n.similarity * 100) + "%" }));

@@ -45,8 +45,12 @@ TOPICS = [
 ]
 SEARCH_LIMIT = 30
 MIN_SIMILARITY = 0.2
-NEAR_MISS_SIMILARITY = 0.35
-MAX_NEAR_MISSES = 40
+NEAR_MISS_SIMILARITY = 0.2  # same bar as matching: everything a rule turned down
+MAX_NEAR_MISSES = 36
+# Below this overlap, refusals for sharing only names, or for closing months apart, are just
+# unrelated markets; they'd bury the instructive look-alikes, so the board skips them.
+WEAK_REASONS = ("only names or dates", "closes ")
+WEAK_SIMILARITY = 0.3
 HISTORY_HOURS = 24 * 7
 HISTORY_STEP_S = 3 * 3600  # keep one point per 3 hours: 56 points a leg over 7 days
 
@@ -149,7 +153,9 @@ async def build() -> dict[str, Any]:
                     new += 1
             for nm in near_misses(k_list, p_list, min_similarity=NEAR_MISS_SIMILARITY):
                 key = (nm.kalshi.id, nm.polymarket.id)
-                if key in misses:
+                if key in misses or key in pairs:
+                    continue
+                if nm.similarity < WEAK_SIMILARITY and nm.reason.startswith(WEAK_REASONS):
                     continue
                 misses[key] = {
                     "topic": topic,
@@ -209,7 +215,7 @@ async def build() -> dict[str, Any]:
             "pairs": len(rows),
             "median_abs_gap": round(statistics.median(gaps), 4) if gaps else None,
             "max_abs_gap": round(max(gaps), 4) if gaps else None,
-            "rejected": len(rejected),
+            "rejected": min(len(rejected), MAX_NEAR_MISSES),
         },
         "pairs": rows,
         "rejected": rejected[:MAX_NEAR_MISSES],

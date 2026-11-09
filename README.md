@@ -11,7 +11,7 @@ Ask Claude (or any MCP client) things like *"What are the odds of a US recession
 - **6 read-only tools:** search, quote, order book, recent trades, price history and cross-venue comparison
 - **One data model for both venues:** every price is a YES probability from 0 to 1, Kalshi NO bids are converted to YES asks, and Polymarket NO-token fills are converted to YES prices
 - **Built for agent workloads:** pooled HTTP clients, per-venue rate limiting, retries that honor `Retry-After`, and a TTL cache that collapses duplicate concurrent requests
-- **Cross-venue matching that avoids look-alikes:** pairs must agree on thresholds, years, above/below/touch, rise/fall and negation, not just share words
+- **Cross-venue matching that avoids look-alikes:** 12 rules make pairs agree on thresholds, dates, place, stage (nominee ≠ confirmed), direction and more, not just share words. Each refusal comes with a readable reason
 - **No API keys:** uses only the venues' public market-data endpoints
 
 ```
@@ -98,13 +98,23 @@ uv run python examples/client.py "fed rate"
 - **Kalshi search.** The documented Kalshi API has no keyword search. The server uses the public search endpoint behind kalshi.com's search box: one request, about 0.3 s, quotes included. That endpoint isn't part of the documented API, so if it fails the server falls back to its own inverted index of every open event, built from the documented `/events` endpoint and cached for 10 minutes. An earlier version always built that index: a cold search took about 10 s and 50+ requests and could trip Kalshi's rate limit.
 - **Rate limits.** Each venue client spaces its requests evenly (5 req/s for Kalshi) instead of bursting and then backing off. On 429 or 5xx it retries with exponential backoff and honors `Retry-After`. A 15-topic `compare_venues` sweep makes 30 requests with zero 429s.
 - **Caching.** Quotes are cached for 5 seconds and searches for 30 seconds. If an agent fires the same request several times in parallel, only one upstream call is made.
-- **Cross-venue matching.** Titles are tokenized, stop words removed, and long forms folded into one token ("United States" → `us`, "Federal Reserve" → `fed`). Similarity is Jaccard weighted by word rarity in the result set, so "Fed" and "2026" count less than "dissent" or "shutdown". Before scoring, a pair must:
-  - share at least one action word, not just a name or a date ("Who will dissent at the FOMC? (Powell)" ≠ "Powell out from the Fed Board");
-  - use the same thresholds (3.5% ≠ 3.0%, 25bps = 25 bps) and overlapping years;
-  - compare the threshold the same way: above, below or touch ("above $150k on Dec 31" ≠ "reach $150k in 2026", "more than 25bps" ≠ "25bps");
-  - move the same way (a rate cut ≠ a rate increase) and agree on negation ("cuts" ≠ "no cuts").
-  
-  These rules came from live data. Without them, a 3.5% Fed-funds threshold was paired with a 3.0% one, showing a fake 98-point gap. Each rule has a regression test built from real title pairs. Close dates must also be within 45 days, and pairs are one-to-one.
+- **Cross-venue matching.** Titles are tokenized, stop words removed, and long forms folded into one token ("United States" → `us`, "Federal Reserve" → `fed`). Similarity is Jaccard weighted by word rarity in the result set, so "Fed" and "2026" count less than "dissent" or "shutdown". Before scoring, a pair must pass 12 title rules, checked in order. `incompatibility_reason(a, b)` returns the first one that fails as plain text ("different dates: Nov 13 vs Nov 9"):
+  1. **Action word.** Share at least one, not just a name or a date ("Who will dissent at the FOMC? (Powell)" ≠ "Powell out from the Fed Board").
+  2. **Negation.** "cuts" ≠ "no cuts".
+  3. **Year.** 2026 ≠ 2027.
+  4. **Dates.** Nov 13 ≠ Nov 9, and "by June 30 (Before July)" ≠ "by the July meeting". "Before Jan 1" counts as the same deadline as "by Dec 31".
+  5. **Timing.** A state *on* a date ≠ something happening *by* that date ("shut down on Dec 12" ≠ "shutdown by December 12").
+  6. **Period.** A quarter ≠ the whole year ("recession starts in Q1 2026" ≠ "recession by end of 2026").
+  7. **Place.** UK GDP ≠ US GDP. Unplaced macro titles (GDP, inflation, recession, the Fed) count as US, the way both venues word them.
+  8. **Stage.** Nominated ≠ confirmed, announced ≠ agreed ("become the next Justice" ≠ "be the next nominee").
+  9. **Qualifier.** An emergency cut ≠ any cut.
+  10. **Direction.** A rate cut ≠ a rate increase.
+  11. **Threshold.** 3.5% ≠ 3.0%, while 25bps = 25 bps.
+  12. **Comparison.** Above, below and touch differ ("above $150k on Dec 31" ≠ "reach $150k in 2026", "more than 25bps" ≠ "25bps").
+
+  Close times must be within 45 days. When the earlier market closes within two weeks, they must also be within a quarter of its remaining life, because three days is noise for a year-end question but a different bet for a weekly crypto price. Pairs are one-to-one.
+
+  These rules came from live data. Without them, a 3.5% Fed-funds threshold was paired with a 3.0% one and showed a fake 98-point gap, and the board's widest "gaps" were a Nov 13 vs Nov 9 crypto price and a nominee vs a confirmed justice. Each rule has a regression test built from real title pairs.
 - **Units.** Prices are probabilities. Volume stays in each venue's own unit (`contracts` on Kalshi, `usd` on Polymarket) and is labeled, never mixed.
 
 ## Development

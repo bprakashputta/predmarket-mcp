@@ -2,7 +2,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from predmarket_mcp.matching import compatible, incompatibility_reason, match_markets, near_misses
+from predmarket_mcp.matching import (
+    close_time_reason,
+    compatible,
+    incompatibility_reason,
+    match_markets,
+    near_misses,
+)
 from predmarket_mcp.models import Market, Venue
 from predmarket_mcp.text import InvertedIndex, jaccard, tokens
 
@@ -203,3 +209,108 @@ def test_near_misses_lists_refused_lookalikes_with_reasons():
     assert [(n.kalshi.id, n.polymarket.id) for n in misses] == [("K1", "P1")]
     assert misses[0].reason == "different threshold: 25bps vs 50bps"
     assert [m.kalshi.id for m in match_markets(k, p)] == ["K2"]
+
+
+# real title pairs from the live board (Nov 2026) that share most words but differ in substance
+@pytest.mark.parametrize(
+    ("a", "b", "reason"),
+    [
+        (
+            "Ethereum price at Nov 13, 2026 at 5pm EST? ($2,200 or above)",
+            "Will the price of Ethereum be above $2,200 on November 9?",
+            "different dates: Nov 13 vs Nov 9",
+        ),
+        (
+            "Will the Federal Reserve cut rates by June 30, 2027? (Before July 2027)",
+            "Fed rate cut by July 2027 meeting?",
+            "different dates: Jun 30 vs July",
+        ),
+        (
+            "Will the Federal Reserve cut rates before 2027? (Cuts)",
+            "Fed rate cut by January 2027 meeting?",
+            "different dates: before 2027 vs January",
+        ),
+        (
+            "Will the US government be shut down on Dec 12, 2026? (Yes)",
+            "Government shutdown by December 12?",
+            "different timing: on a date vs by a date",
+        ),
+        (
+            "When will the next U.S. recession start? (Q1 2026)",
+            "US recession by end of 2026?",
+            "different period: Q1 vs no quarter",
+        ),
+        (
+            "GDP growth in 2026? (0.0% or Below)",
+            "Will UK annual GDP growth in 2026 be below 0%?",
+            "different place: US (implied) vs UK",
+        ),
+        (
+            "Will South Africa GDP growth rate QoQ for Q3 2026 be above 1.0%?",
+            "Will UK GDP growth in Q3 2026 be negative?",
+            "different place: South Africa vs UK",
+        ),
+        (
+            "Will Aileen Cannon become the next Justice on the Supreme Court?",
+            "Will Aileen Cannon be the next Supreme Court nominee?",
+            "different stage: become vs nominee",
+        ),
+        (
+            "Will the Prime Minister of Canada announce lower tariffs on U.S. goods before "
+            "Jan 1, 2027?",
+            "US-Canada diplomatic agreement to lower tariffs by December 31?",
+            "different stage: announce vs agreement",  # before Jan 1 == by Dec 31, so dates agree
+        ),
+        (
+            "Will the Federal Reserve cut rates before 2027? (Cuts)",
+            "Fed emergency rate cut before 2027?",
+            "narrower on one side: emergency",
+        ),
+    ],
+)
+def test_incompatibility_reason_dates_place_stage(a, b, reason):
+    assert incompatibility_reason(a, b) == reason
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        # same deadline written two ways, same place, same stage: still a pair
+        (
+            "Will the US government be shut down by Dec 12, 2026?",
+            "Government shutdown by December 12?",
+        ),
+        (
+            "Will the Federal Reserve cut rates by December 31, 2026? (Before 2027)",
+            "Fed rate cut by December 2026 meeting?",
+        ),
+        ("Will there be a recession in 2027? (Yes)", "US recession by end of 2027?"),
+        (
+            "Will the Fed hike rates in 2026?",
+            "Will the Federal Reserve raise interest rates in 2026?",
+        ),
+        ("Will the next Fed chair be confirmed?", "Fed chair confirmed by the Senate?"),
+    ],
+)
+def test_new_rules_keep_genuine_pairs(a, b):
+    assert incompatibility_reason(a, b) is None
+
+
+def test_close_time_rule_is_strict_only_for_short_dated_markets():
+    now = datetime(2026, 11, 9, tzinfo=UTC)
+
+    def leg(venue, days):
+        return Market(
+            venue=venue, id=venue.value, title="t", volume_unit="usd",
+            close_time=now + timedelta(days=days),
+        )  # fmt: skip
+
+    k, p = Venue.KALSHI, Venue.POLYMARKET
+    # closes in 4 days vs 1 day: most of the remaining life apart
+    assert close_time_reason(leg(k, 4), leg(p, 1), now) == ("closes 3 days apart with 1 day left")
+    # a year-end question where one venue closes three weeks after the other is normal
+    assert close_time_reason(leg(k, 53), leg(p, 31), now) is None
+    # half a day apart on a short-dated market is fine
+    assert close_time_reason(leg(k, 5), leg(p, 5.5), now) is None
+    # the long-standing 45-day cap still applies
+    assert close_time_reason(leg(k, 300), leg(p, 200), now) == "closes 100 days apart (limit 45)"

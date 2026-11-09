@@ -122,8 +122,9 @@ async def compare_venues(
     """Search both venues and pair markets that appear to ask the same question.
 
     price_gap = Polymarket mid minus Kalshi mid. Pairs must share the question's key words and
-    agree on thresholds, years, direction and negation, but they are still candidates: always
-    confirm the resolution rules match before acting on a gap."""
+    agree on dates, place, stage, thresholds, direction and negation, and close at similar
+    times, but they are still candidates: always confirm the resolution rules match before
+    acting on a gap."""
     kalshi, polymarket = await asyncio.gather(
         _kalshi.search(query, limit=30), _polymarket.search(query, limit=30)
     )

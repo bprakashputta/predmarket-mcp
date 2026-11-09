@@ -6,6 +6,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 
 from .models import Market, MarketMatch
 from .text import InvertedIndex, tokens
@@ -34,6 +35,199 @@ _MONTHS = frozenset(
     "january february march april may june july august september october november december "
     "jan feb mar apr jun jul aug sep sept oct nov dec".split()
 )
+
+
+_MONTH_NAMES = (
+    "January February March April May June July August September October November December"
+).split()
+_MONTH = re.compile(
+    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?(?:\s+(\d{1,2})(?:st|nd|rd|th)?\b)?"
+)
+
+# Places. A title that names none is unplaced, except macro questions (GDP, inflation, a
+# recession, the Fed), which both venues word without a country when they mean the US.
+_PLACES: dict[str, str] = {
+    **{w: "US" for w in ("us", "american", "america")},
+    **{w: "UK" for w in ("uk", "britain", "british", "england")},
+    **{w: "EU" for w in ("eu", "eurozone", "euro area", "ecb")},
+    **{w: "World" for w in ("world", "global", "worldwide")},
+    "canada": "Canada",
+    "canadian": "Canada",
+    "china": "China",
+    "chinese": "China",
+    "japan": "Japan",
+    "japanese": "Japan",
+    "boj": "Japan",
+    "germany": "Germany",
+    "german": "Germany",
+    "france": "France",
+    "french": "France",
+    "india": "India",
+    "indian": "India",
+    "mexico": "Mexico",
+    "mexican": "Mexico",
+    "brazil": "Brazil",
+    "russia": "Russia",
+    "russian": "Russia",
+    "italy": "Italy",
+    "spain": "Spain",
+    "australia": "Australia",
+    "south korea": "South Korea",
+    "korea": "South Korea",
+    "argentina": "Argentina",
+    "turkey": "Turkey",
+    "switzerland": "Switzerland",
+    **{
+        w: w.title()
+        for w in (
+            "nigeria egypt israel iran ukraine poland netherlands sweden norway ireland "
+            "singapore indonesia taiwan vietnam chile colombia venezuela pakistan"
+        ).split()
+    },
+    **{w: w.title() for w in ("south africa", "new zealand", "saudi arabia", "hong kong")},
+}
+_PLACE = re.compile(
+    r"\b(" + "|".join(sorted(map(re.escape, _PLACES), key=len, reverse=True)) + r")\b"
+)
+_US_DEFAULT = re.compile(
+    r"\b(gdp|inflation|cpi|pce|unemployment|jobless|payrolls?|recession|fed|fomc|"
+    r"federal reserve|federal funds|interest rates?)\b"
+)
+# How far along a process the question is: put forward, approved, announced or agreed.
+# A nominee isn't a confirmed justice, and announcing a tariff cut isn't signing a deal.
+_STAGES = {
+    "nominated": re.compile(r"\b(nominee|nominees|nominated?|nominates|nomination)\b"),
+    "confirmed": re.compile(
+        r"\b(confirmed|confirms?|confirmation|becomes?|appointed|sworn in|takes? office)\b"
+    ),
+    "announced": re.compile(r"\b(announces?|announced|announcement)\b"),
+    "agreed": re.compile(r"\b(agreements?|agrees?|agreed|signs?|signed|signing|deal)\b"),
+}
+
+
+_BEFORE_YEAR = re.compile(r"\bbefore (\d{4})\b")
+_QUARTER = re.compile(r"\bq([1-4])\b")
+_MONTH_WORD = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}"
+# "on Dec 12" is the state on that day; "by Dec 12" is anything that happens before it
+_TIMING = {
+    "on": re.compile(rf"\b(on|at)\s+{_MONTH_WORD}"),
+    "by": re.compile(rf"\b(by|before)\s+{_MONTH_WORD}"),
+}
+# words that narrow a question to a subset: an emergency cut is a cut, not every cut
+_QUALIFIERS = re.compile(r"\b(emergency|unscheduled|inter-?meeting|surprise)\b")
+
+
+@dataclass(frozen=True)
+class _Dates:
+    days: frozenset[tuple[int, int]]  # (month, day)
+    months: frozenset[int]  # months named without a day
+    labels: tuple[str, ...]  # as written, for reasons
+
+
+def _dates(title: str) -> _Dates:
+    """Calendar anchors in a title: 'Nov 13', 'July 2027', and 'before 2027' (= Dec 31)."""
+    text = title.lower()
+    days: set[tuple[int, int]] = set()
+    months: set[int] = set()
+    labels: list[str] = []
+    for m in _MONTH.finditer(text):
+        word, day = m.group(1), m.group(2)
+        if word == "may" and not day:
+            continue  # "may" is usually the verb
+        month = next(i for i, n in enumerate(_MONTH_NAMES, 1) if n.lower().startswith(word[:3]))
+        if day and 1 <= int(day) <= 31:
+            labels.append(f"{_MONTH_NAMES[month - 1][:3]} {int(day)}")
+            if text[: m.start()].rstrip().endswith("before"):
+                # "before Jan 1" is the same deadline as "by Dec 31"
+                prev = date(2001, month, min(int(day), 28 if month == 2 else int(day)))
+                prev -= timedelta(days=1)
+                month, day = prev.month, str(prev.day)
+            days.add((month, int(day)))
+        else:
+            months.add(month)
+    for year in _BEFORE_YEAR.findall(text):
+        days.add((12, 31))
+        labels.append(f"before {year}")
+    if not days:  # a bare month only anchors the title when there is no day
+        labels = [_MONTH_NAMES[m - 1] for m in sorted(months)]
+    return _Dates(frozenset(days), frozenset(months), tuple(dict.fromkeys(labels)))
+
+
+def _date_conflict(a: str, b: str) -> str | None:
+    """Both titles name a date and they don't agree. A day beats a bare month: 'by June 30,
+    2027 (Before July 2027)' is anchored on June, not July. One side with no date passes."""
+    x, y = _dates(a), _dates(b)
+    if x.days and y.days:
+        clash = not x.days & y.days
+    else:
+        months_a = {m for m, _ in x.days} or x.months
+        months_b = {m for m, _ in y.days} or y.months
+        clash = bool(months_a and months_b and not months_a & months_b)
+    if clash:
+        return f"different dates: {', '.join(x.labels)} vs {', '.join(y.labels)}"
+    return None
+
+
+def _timing_conflict(a: str, b: str) -> str | None:
+    ta = {name for name, rx in _TIMING.items() if rx.search(a.lower())}
+    tb = {name for name, rx in _TIMING.items() if rx.search(b.lower())}
+    if ta and tb and not ta & tb:
+        return f"different timing: {'/'.join(sorted(ta))} a date vs {'/'.join(sorted(tb))} a date"
+    return None
+
+
+def _period_conflict(a: str, b: str) -> str | None:
+    """A quarter is not the whole year: 'recession starts in Q1 2026' vs 'by end of 2026'."""
+    qa, qb = set(_QUARTER.findall(a.lower())), set(_QUARTER.findall(b.lower()))
+    if qa != qb:
+
+        def show(q: set[str]) -> str:
+            return ", ".join(f"Q{n}" for n in sorted(q)) or "no quarter"
+
+        return f"different period: {show(qa)} vs {show(qb)}"
+    return None
+
+
+def _qualifier_conflict(a: str, b: str) -> str | None:
+    qa = {m.replace("-", "") for m in _QUALIFIERS.findall(a.lower())}
+    qb = {m.replace("-", "") for m in _QUALIFIERS.findall(b.lower())}
+    if qa != qb:
+        return f"narrower on one side: {', '.join(sorted(qa ^ qb))}"
+    return None
+
+
+def _places(title: str) -> tuple[frozenset[str], bool]:
+    """Places a title names, and whether it was assumed (US for an unplaced macro question)."""
+    text = title.lower().replace("u.s.", "us").replace("united states", "us")
+    text = text.replace("united kingdom", "uk").replace("european union", "eu")
+    found = frozenset(_PLACES[m] for m in _PLACE.findall(text))
+    if not found and _US_DEFAULT.search(text):
+        return frozenset({"US"}), True
+    return found, False
+
+
+def _place_conflict(a: str, b: str) -> str | None:
+    (pa, ia), (pb, ib) = _places(a), _places(b)
+    if pa and pb and not pa & pb:
+
+        def show(p: frozenset[str], implied: bool) -> str:
+            return "/".join(sorted(p)) + (" (implied)" if implied else "")
+
+        return f"different place: {show(pa, ia)} vs {show(pb, ib)}"
+    return None
+
+
+def _stages(title: str) -> dict[str, str]:
+    text = title.lower()
+    return {name: m.group(0) for name, rx in _STAGES.items() if (m := rx.search(text))}
+
+
+def _stage_conflict(a: str, b: str) -> str | None:
+    sa, sb = _stages(a), _stages(b)
+    if sa and sb and not sa.keys() & sb.keys():
+        return f"different stage: {' / '.join(sa.values())} vs {' / '.join(sb.values())}"
+    return None
 
 
 @dataclass(frozen=True)
@@ -115,7 +309,8 @@ def incompatibility_reason(a: str, b: str) -> str | None:
     """Why two titles that share words still ask different questions, or None if they agree.
 
     Catches e.g. 'above 3.75%' vs 'exactly 3.75%', a 3.5% vs a 3% threshold, 2026 vs 2027,
-    a cut vs a hike, or 'cuts' vs 'no cuts'. Checks run in a fixed order and the first
+    Nov 13 vs Nov 9, UK vs US GDP, a nominee vs a confirmed justice, a cut vs a hike, or
+    'cuts' vs 'no cuts'. Checks run in a fixed order and the first
     failing one is reported."""
     if not shares_action(a, b):
         return "only names or dates in common, no shared action word"
@@ -124,6 +319,16 @@ def incompatibility_reason(a: str, b: str) -> str | None:
         return f"negated on one side only ({'first' if x.negated else 'second'} says no/not)"
     if x.years and y.years and not x.years & y.years:
         return f"different year: {_show_years(x.years)} vs {_show_years(y.years)}"
+    for check in (
+        _date_conflict,
+        _timing_conflict,
+        _period_conflict,
+        _place_conflict,
+        _stage_conflict,
+        _qualifier_conflict,
+    ):
+        if reason := check(a, b):
+            return reason
     if x.movement and y.movement and x.movement != y.movement:
         return f"opposite direction: {_movement_word(a)} vs {_movement_word(b)}"
     if x.numbers != y.numbers:
@@ -141,9 +346,43 @@ def incompatibility_reason(a: str, b: str) -> str | None:
 
 
 def compatible(a: str, b: str) -> bool:
-    """True when two titles agree on action, negation, years, direction, thresholds and
-    comparison. See incompatibility_reason for the checks."""
+    """True when two titles agree on action, negation, years, dates, place, stage, direction,
+    thresholds and comparison. See incompatibility_reason for the checks."""
     return incompatibility_reason(a, b) is None
+
+
+# Close times. Venues close the "same" question at slightly different moments (Kalshi often
+# after the data release, Polymarket before it), so for long-dated markets a few weeks apart
+# is normal and MAX_CLOSE_GAP_DAYS is the only cap. For a market that closes soon, the same
+# few days are most of its remaining life: a crypto price on Nov 9 and on Nov 13 are
+# different bets. So when the earlier leg closes within SHORT_DATED_DAYS, the close times
+# must also be within SHORT_DATED_SHARE of the time it has left (and never more than a day
+# apart when it closes within a few days).
+SHORT_DATED_DAYS = 14
+SHORT_DATED_SHARE = 0.25
+
+
+def _days(n: float) -> str:
+    n = round(n)
+    return f"{n} day" if n == 1 else f"{n} days"
+
+
+def close_time_reason(a: Market, b: Market, now: datetime | None = None) -> str | None:
+    """Why two markets' close times are too far apart to be the same question, or None."""
+    if not (a.close_time and b.close_time):
+        return None
+    apart = abs((a.close_time - b.close_time).total_seconds()) / 86400
+    if apart > MAX_CLOSE_GAP_DAYS:
+        return f"closes {_days(apart)} apart (limit {MAX_CLOSE_GAP_DAYS})"
+    left = (min(a.close_time, b.close_time) - (now or datetime.now(UTC))).total_seconds() / 86400
+    if 0 < left <= SHORT_DATED_DAYS and apart > max(1.0, SHORT_DATED_SHARE * left):
+        return f"closes {_days(apart)} apart with {_days(left)} left"
+    return None
+
+
+def pair_reason(k: Market, p: Market, now: datetime | None = None) -> str | None:
+    """Every check a cross-venue pair must pass: titles first, then close times."""
+    return incompatibility_reason(k.title, p.title) or close_time_reason(k, p, now)
 
 
 def _text(m: Market) -> str:
@@ -195,22 +434,18 @@ def _similar_pairs(
 
 
 def match_markets(
-    kalshi: list[Market], polymarket: list[Market], min_similarity: float = 0.2
+    kalshi: list[Market],
+    polymarket: list[Market],
+    min_similarity: float = 0.2,
+    now: datetime | None = None,
 ) -> list[MarketMatch]:
     """Greedy one-to-one matching on rarity-weighted title similarity, after checking that
-    thresholds, years, direction and negation agree and close dates are near each other."""
-    candidates: list[tuple[float, int, int]] = []
-    for sim, ki, pi in _similar_pairs(kalshi, polymarket, min_similarity):
-        k, p = kalshi[ki], polymarket[pi]
-        if not compatible(k.title, p.title):
-            continue
-        if (
-            k.close_time
-            and p.close_time
-            and abs((k.close_time - p.close_time).days) > MAX_CLOSE_GAP_DAYS
-        ):
-            continue
-        candidates.append((sim, ki, pi))
+    the titles ask the same question (see incompatibility_reason) and close times agree."""
+    candidates = [
+        (sim, ki, pi)
+        for sim, ki, pi in _similar_pairs(kalshi, polymarket, min_similarity)
+        if pair_reason(kalshi[ki], polymarket[pi], now) is None
+    ]
 
     candidates.sort(reverse=True)
     used_k: set[int] = set()
@@ -228,15 +463,25 @@ def match_markets(
 
 
 def near_misses(
-    kalshi: list[Market], polymarket: list[Market], min_similarity: float = 0.35
+    kalshi: list[Market],
+    polymarket: list[Market],
+    min_similarity: float = 0.35,
+    now: datetime | None = None,
 ) -> list[NearMiss]:
-    """Pairs whose titles overlap heavily but that incompatibility_reason refuses, most
-    similar first. Useful to show what the matcher protects against."""
-    out: list[NearMiss] = []
+    """Pairs the checks refused that would otherwise have matched: greedy one-to-one on
+    similarity, like match_markets, so each market shows only its closest look-alike."""
+    refused: list[tuple[float, int, int, str]] = []
     for sim, ki, pi in _similar_pairs(kalshi, polymarket, min_similarity):
-        k, p = kalshi[ki], polymarket[pi]
-        reason = incompatibility_reason(k.title, p.title)
-        if reason:
-            out.append(NearMiss(k, p, round(sim, 3), reason))
-    out.sort(key=lambda n: n.similarity, reverse=True)
+        if reason := pair_reason(kalshi[ki], polymarket[pi], now):
+            refused.append((sim, ki, pi, reason))
+    refused.sort(key=lambda r: r[0], reverse=True)
+    used_k: set[int] = set()
+    used_p: set[int] = set()
+    out: list[NearMiss] = []
+    for sim, ki, pi, reason in refused:
+        if ki in used_k or pi in used_p:
+            continue
+        used_k.add(ki)
+        used_p.add(pi)
+        out.append(NearMiss(kalshi[ki], polymarket[pi], round(sim, 3), reason))
     return out
