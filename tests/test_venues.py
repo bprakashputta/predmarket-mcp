@@ -5,7 +5,7 @@ import respx
 
 from predmarket_mcp.http import HttpClient, TTLCache
 from predmarket_mcp.kalshi import BASE_URL as KALSHI_URL
-from predmarket_mcp.kalshi import KalshiClient
+from predmarket_mcp.kalshi import SITE_SEARCH_URL, KalshiClient
 from predmarket_mcp.kalshi import to_market as kalshi_market
 from predmarket_mcp.polymarket import CLOB_URL, DATA_URL, GAMMA_URL, PolymarketClient, yes_token
 from predmarket_mcp.polymarket import to_market as pm_market
@@ -79,7 +79,46 @@ async def test_kalshi_orderbook_converts_no_bids_to_yes_asks():
 
 
 @respx.mock
-async def test_kalshi_search_uses_catalog_and_skips_combo_markets():
+async def test_kalshi_search_uses_site_search_and_skips_settled_and_combo():
+    respx.get(SITE_SEARCH_URL).respond(
+        json={
+            "current_page": [
+                {
+                    "series_ticker": "KXRECSSNBER",
+                    "event_ticker": "KXRECSSNBER-27",
+                    "event_title": "Recession in 2027?",
+                    "category": "Economics",
+                    "markets": [
+                        {
+                            "ticker": "KXRECSSNBER-27",
+                            "yes_subtitle": "In 2027",
+                            "yes_bid_dollars": "0.2100",
+                            "yes_ask_dollars": "0.2200",
+                            "last_price_dollars": "0.2100",
+                            "volume": 1495,
+                            "close_ts": "2028-01-31T13:25:00Z",
+                            "result": "",
+                        },
+                        {"ticker": "KXRECSSNBER-26", "result": "no"},
+                        {"ticker": "KXMVE-X", "result": ""},
+                    ],
+                }
+            ]
+        }
+    )
+    events = respx.get(f"{KALSHI_URL}/events")
+    results = await KalshiClient(fast_http(KALSHI_URL)).search("recession 2027")
+    assert [m.id for m in results] == ["KXRECSSNBER-27"]
+    m = results[0]
+    assert m.title == "Recession in 2027?"  # outcome label already in the title
+    assert (m.mid, m.volume, m.category) == (0.215, 1495.0, "Economics")
+    assert m.url == "https://kalshi.com/markets/kxrecssnber"
+    assert not events.called  # the catalog is only built as a fallback
+
+
+@respx.mock
+async def test_kalshi_search_falls_back_to_catalog_index():
+    respx.get(SITE_SEARCH_URL).respond(404)
     respx.get(f"{KALSHI_URL}/events").respond(json={"events": [KALSHI_EVENT], "cursor": ""})
     combo = {**KALSHI_MARKET, "ticker": "KXMVE-X", "mve_collection_ticker": "KXMVE"}
     respx.get(f"{KALSHI_URL}/markets").respond(json={"markets": [KALSHI_MARKET, combo]})

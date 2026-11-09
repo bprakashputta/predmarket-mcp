@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from itertools import zip_longest
 from typing import Any, Literal
 
@@ -25,19 +23,8 @@ _kalshi = KalshiClient()
 _polymarket = PolymarketClient()
 
 
-@asynccontextmanager
-async def _lifespan(_: Any) -> AsyncIterator[None]:
-    # warm the Kalshi search index in the background so the first search is fast
-    task = asyncio.create_task(_kalshi.warm())
-    try:
-        yield
-    finally:
-        task.cancel()
-
-
 mcp = MCPServer(
     "predmarket",
-    lifespan=_lifespan,
     version="0.1.0",
     instructions=(
         "Live prediction-market data from Kalshi and Polymarket. Prices are YES probabilities "
@@ -130,12 +117,13 @@ async def get_price_history(venue: VenueName, market_id: str, hours: int = 72) -
 
 @mcp.tool(annotations=READ_ONLY)
 async def compare_venues(
-    query: str, min_similarity: float = 0.35, limit: int = 10
+    query: str, min_similarity: float = 0.2, limit: int = 10
 ) -> list[dict[str, Any]]:
     """Search both venues and pair markets that appear to ask the same question.
 
-    price_gap = Polymarket mid minus Kalshi mid. Matches are by title similarity and close
-    date only: always confirm the resolution rules match before acting on a gap."""
+    price_gap = Polymarket mid minus Kalshi mid. Pairs must share the question's key words and
+    agree on thresholds, years, direction and negation, but they are still candidates: always
+    confirm the resolution rules match before acting on a gap."""
     kalshi, polymarket = await asyncio.gather(
         _kalshi.search(query, limit=30), _polymarket.search(query, limit=30)
     )

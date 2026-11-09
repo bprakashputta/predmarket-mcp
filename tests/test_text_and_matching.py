@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
-from predmarket_mcp.matching import match_markets
+import pytest
+
+from predmarket_mcp.matching import compatible, match_markets
 from predmarket_mcp.models import Market, Venue
 from predmarket_mcp.text import InvertedIndex, jaccard, tokens
 
@@ -74,3 +76,67 @@ def test_match_is_one_to_one():
     k = [mk(Venue.KALSHI, "K1", "Bitcoin above 150k"), mk(Venue.KALSHI, "K2", "Bitcoin above 150k")]
     p = [mk(Venue.POLYMARKET, "P1", "Bitcoin above 150k")]
     assert len(match_markets(k, p)) == 1
+
+
+@pytest.mark.parametrize(
+    ("kalshi", "polymarket", "same"),
+    [
+        # real title pairs seen on the two venues (Nov 2026)
+        (
+            "Will the upper bound of the federal funds rate be above 3.50% following the "
+            "Fed's Dec 9, 2026 meeting?",
+            "Will the upper bound of the target federal funds rate be 3.0% at the end of 2026?",
+            False,  # different threshold
+        ),
+        (
+            "Will the upper bound of the federal funds rate be above 3.75% following the "
+            "Fed's Dec 9, 2026 meeting?",
+            "Will the upper bound of the target federal funds rate be 3.75% at the end of 2026?",
+            False,  # "above" vs "exactly"
+        ),
+        ("Will the Fed cut rates 1 time?", "Will no Fed rate cuts happen in 2026?", False),
+        (
+            "When will the next U.S. recession start? (Before 2027)",
+            "US recession by end of 2026?",
+            False,
+        ),
+        ("Will there be a recession in 2027?", "US recession by end of 2027?", True),
+        (
+            "Will Bitcoin be above $150,000 by Dec 31, 2026?",
+            "Will Bitcoin reach $150k in 2026?",
+            False,  # closing above on a date vs touching once during the year
+        ),
+        (
+            "Will the Federal Reserve Cut rates by 25bps at their December meeting?",
+            "Will the Fed increase interest rates by 25 bps after the December meeting?",
+            False,  # cut vs increase
+        ),
+        (
+            "Who will dissent at the December 2026 FOMC meeting? (Jerome Powell)",
+            "Jerome Powell out from Fed Board by December 31?",
+            False,  # shares only a name and a date
+        ),
+        (
+            "Will the Federal Reserve Hike rates by >25bps at their next meeting?",
+            "Another Fed rate hike in 2026?",
+            False,  # a 25bps threshold on one side only
+        ),
+        (
+            "Will the Federal Reserve Hike rates by >25bps at their December meeting?",
+            "Will the Fed increase interest rates by 25 bps after the December meeting?",
+            False,  # more than 25bps vs exactly 25bps
+        ),
+        (
+            "Will there be at least 4 Fed rate hikes in 2026?",
+            "Will 4 Fed rate hikes happen in 2026?",
+            False,
+        ),
+        (
+            "Will there be exactly 2 Fed rate hikes in 2026?",
+            "Will 2 Fed rate hikes happen in 2026?",
+            True,
+        ),
+    ],
+)
+def test_compatible_rejects_lookalikes_with_different_terms(kalshi, polymarket, same):
+    assert compatible(kalshi, polymarket) is same

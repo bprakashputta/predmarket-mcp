@@ -15,9 +15,13 @@ from .models import Level, Market, OrderBook, PricePoint, Trade, Venue
 from .text import InvertedIndex
 
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+# The search box on kalshi.com uses this endpoint. It's public but not part of the documented
+# Trade API, so any failure falls back to the documented-endpoint catalog index below.
+SITE_SEARCH_URL = "https://api.elections.kalshi.com/v1/search/series"
 CATALOG_TTL = 600  # seconds; open events change slowly
+SEARCH_TTL = 30
 QUOTE_TTL = 5
-MAX_CATALOG_PAGES = 50  # 200 events per page
+MAX_CATALOG_PAGES = 150  # 200 events per page
 
 
 def _f(value: Any) -> float | None:
@@ -40,13 +44,21 @@ def _is_combo(m: dict[str, Any]) -> bool:
     return bool(m.get("mve_collection_ticker")) or m.get("ticker", "").startswith("KXMVE")
 
 
+def with_outcome(title: str, outcome: str | None) -> str:
+    """Bucket markets often share their event's generic title ("When will X happen?");
+    append the outcome label ("Before 2027") so each market reads as its own question."""
+    if outcome and outcome.lower() not in title.lower():
+        return f"{title} ({outcome})" if title else outcome
+    return title
+
+
 def to_market(m: dict[str, Any], event: dict[str, Any] | None = None) -> Market:
     bid, ask = _f(m.get("yes_bid_dollars")), _f(m.get("yes_ask_dollars"))
     series = (event or {}).get("series_ticker")
     return Market(
         venue=Venue.KALSHI,
         id=m["ticker"],
-        title=m.get("title") or m["ticker"],
+        title=with_outcome(m.get("title") or m["ticker"], m.get("yes_sub_title")),
         event_title=(event or {}).get("title"),
         category=(event or {}).get("category"),
         yes_bid=bid if bid else None,
@@ -59,9 +71,36 @@ def to_market(m: dict[str, Any], event: dict[str, Any] | None = None) -> Market:
     )
 
 
+def site_search_markets(item: dict[str, Any]) -> list[Market]:
+    """Map one result from the kalshi.com search endpoint to markets."""
+    event = {
+        "title": item.get("event_title"),
+        "category": item.get("category"),
+        "series_ticker": item.get("series_ticker"),
+    }
+    out = []
+    for m in item.get("markets") or []:
+        if m.get("result") or _is_combo(m):  # settled or combo
+            continue
+        title = with_outcome(m.get("title") or item.get("event_title") or "", m.get("yes_subtitle"))
+        out.append(
+            to_market(
+                {
+                    **m,
+                    "title": title,
+                    "volume_fp": m.get("volume"),
+                    "close_time": m.get("close_ts"),
+                    "event_ticker": item.get("event_ticker"),
+                },
+                event,
+            )
+        )
+    return out
+
+
 class KalshiClient:
     def __init__(self, http: HttpClient | None = None, cache: TTLCache | None = None) -> None:
-        self.http = http or HttpClient(BASE_URL, max_rps=8)
+        self.http = http or HttpClient(BASE_URL, max_rps=5)
         self.cache = cache or TTLCache()
 
     async def _catalog(self) -> InvertedIndex[dict[str, Any]]:
@@ -86,10 +125,6 @@ class KalshiClient:
 
         return await self.cache.get_or_set("kalshi:catalog", CATALOG_TTL, load)
 
-    async def warm(self) -> None:
-        """Build the search index ahead of the first query."""
-        await self._catalog()
-
     async def event_markets(self, event: dict[str, Any]) -> list[Market]:
         ticker = event["event_ticker"]
 
@@ -102,6 +137,27 @@ class KalshiClient:
         return await self.cache.get_or_set(f"kalshi:event:{ticker}", QUOTE_TTL * 6, load)
 
     async def search(self, query: str, limit: int = 10) -> list[Market]:
+        try:
+            markets = await self._site_search(query)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            markets = None
+        if markets is None:
+            return await self._catalog_search(query, limit)
+        return markets[:limit]
+
+    async def _site_search(self, query: str) -> list[Market]:
+        async def load() -> list[Market]:
+            data = await self.http.get_json(SITE_SEARCH_URL, {"query": query, "page_size": 20})
+            out: list[Market] = []
+            for item in data["current_page"]:
+                markets = site_search_markets(item)
+                # within an event, show the most traded outcomes first
+                out.extend(sorted(markets, key=lambda m: m.volume or 0, reverse=True)[:5])
+            return out
+
+        return await self.cache.get_or_set(f"kalshi:search:{query.lower()}", SEARCH_TTL, load)
+
+    async def _catalog_search(self, query: str, limit: int) -> list[Market]:
         index = await self._catalog()
         events = [ev for _, ev in index.search(query, limit=limit, min_score=0.3)]
         per_event = await asyncio.gather(*(self.event_markets(ev) for ev in events))
