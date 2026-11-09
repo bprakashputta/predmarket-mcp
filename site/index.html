@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cross-venue board · predmarket-mcp</title>
+  <meta name="description" content="Live snapshot of prediction markets that ask the same question on Kalshi and Polymarket, the price gap between them, and the look-alikes the matcher refused. Built on predmarket-mcp.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f5f2eb'/%3E%3Cpath d='M6 16h20' stroke='%2317160f' stroke-width='2'/%3E%3Ccircle cx='9' cy='16' r='4' fill='%2312876f'/%3E%3Ccircle cx='23' cy='16' r='4' fill='%233b5bdb'/%3E%3C/svg%3E">
+  <script>
+    // ?theme=dark|light pins the theme (used for screenshots); otherwise follow the OS
+    try { const t = new URLSearchParams(location.search).get("theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#pairs">Skip to the pairs</a>
+
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="./"><b>predmarket-mcp</b><span class="slash">/</span><span>Cross-venue board</span></a>
+      <nav aria-label="Links">
+        <a href="https://github.com/bprakashputta/predmarket-mcp">Code<span class="hide-sm"> on GitHub</span></a>
+        <a href="https://bprakashputta.github.io/work/predmarket-mcp.html">Case study</a>
+        <a href="https://bprakashputta.github.io" class="hide-sm">Portfolio</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero wrap">
+      <p class="label eyebrow">Kalshi <span aria-hidden="true">×</span> Polymarket · live public data</p>
+      <h1 class="display">The same question, priced by two <em>markets</em>.</h1>
+      <div class="hero-grid">
+        <p class="dek">Every few hours this board searches both venues for the same topics, pairs markets that ask the same thing, and shows where their prices disagree. It also shows the pairs that only looked alike, and why the matcher turned them down.</p>
+        <p class="stamp mono" id="stamp"><span class="pulse" aria-hidden="true"></span><span>Loading snapshot…</span></p>
+      </div>
+    </section>
+
+    <section class="wrap" aria-label="Snapshot summary">
+      <dl class="proof" id="proof">
+        <div><dt>Matched pairs</dt><dd>–</dd></div>
+        <div><dt>Median gap</dt><dd>–</dd></div>
+        <div><dt>Widest gap</dt><dd>–</dd></div>
+        <div><dt>Markets scanned</dt><dd>–</dd></div>
+        <div><dt>Look-alikes refused</dt><dd>–</dd></div>
+      </dl>
+    </section>
+
+    <section class="section wrap" id="pairs" aria-labelledby="pairs-h">
+      <div class="section-head">
+        <p class="label">01 · Matched pairs</p>
+        <div>
+          <h2 id="pairs-h">Where the two venues <em>disagree</em></h2>
+          <p>Each row is one question as Kalshi and Polymarket word it. Dots sit on one shared scale, the YES probability. Open a row for seven days of prices on both venues.</p>
+        </div>
+      </div>
+
+      <form class="filters" id="filters" role="search" aria-label="Filter pairs" onsubmit="return false">
+        <label class="field">
+          <span class="label">Topic</span>
+          <select id="f-topic"><option value="">All topics</option></select>
+        </label>
+        <label class="field grow">
+          <span class="label">Search</span>
+          <input id="f-q" type="search" placeholder="e.g. recession, bitcoin, Oldham" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span class="label">Sort</span>
+          <select id="f-sort">
+            <option value="gap">Largest gap</option>
+            <option value="sim">Closest wording</option>
+            <option value="close">Closing soonest</option>
+          </select>
+        </label>
+        <div class="legend" aria-label="Legend">
+          <span><i class="dot k" aria-hidden="true"></i>Kalshi</span>
+          <span><i class="dot p" aria-hidden="true"></i>Polymarket</span>
+        </div>
+      </form>
+
+      <div class="board" id="board" aria-live="polite">
+        <div class="board-head" aria-hidden="true">
+          <span class="label">Topic</span>
+          <span class="label">Question, as each venue words it</span>
+          <span class="axis-head"><span class="label">YES price</span><span class="ticks mono"><i>0</i><i>25</i><i>50</i><i>75</i><i>100%</i></span></span>
+          <span class="label num">Gap</span>
+          <span class="label num">Volume</span>
+        </div>
+        <ol class="rows" id="rows"></ol>
+        <p class="board-foot mono" id="board-foot"></p>
+      </div>
+    </section>
+
+    <section class="section wrap" id="refused" aria-labelledby="refused-h">
+      <div class="section-head">
+        <p class="label">02 · Refused</p>
+        <div>
+          <h2 id="refused-h">Look-alikes the matcher <em>refused</em></h2>
+          <p>These titles share most of their words, enough to pass a similarity test. Each one asks a different question, though, so pairing them would show a gap that means nothing. The reason is the first rule each pair failed.</p>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="refused" id="refused-table">
+          <thead><tr><th scope="col">Kalshi</th><th scope="col">Polymarket</th><th scope="col">Why not</th><th scope="col" class="num">Overlap</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section wrap method" aria-labelledby="method-h">
+      <div class="section-head">
+        <p class="label">03 · Method</p>
+        <div><h2 id="method-h">How a pair gets <em>made</em></h2></div>
+      </div>
+      <div class="principles">
+        <div>
+          <p class="n mono">01</p>
+          <h3>Search the same words</h3>
+          <p>Each topic runs through both venues' public search. Titles are tokenized, stop words dropped, and long forms folded together ("Federal Reserve" → <code>fed</code>).</p>
+        </div>
+        <div>
+          <p class="n mono">02</p>
+          <h3>Score by rare words</h3>
+          <p>Similarity is Jaccard weighted by how rare each word is in the result set, so "nominee" counts for more than "2026". Pairs are one-to-one, and close dates must be within 45 days.</p>
+        </div>
+        <div>
+          <p class="n mono">03</p>
+          <h3>Refuse look-alikes</h3>
+          <p>A pair must share an action word and agree on thresholds, years, above / below / touch, rise / fall and negation. Each rule has a regression test built from real titles.</p>
+        </div>
+      </div>
+      <div class="caveats">
+        <p class="callout"><span class="label">Read before trading</span>A gap is not an arbitrage. Venues define and resolve events differently: being nominated isn't being confirmed, a price on one date isn't a price on another, and fees, limits and settlement differ. Use a pair as a lead, then read both rule books.</p>
+        <p class="topics mono" id="topics"></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site">
+    <div class="wrap">
+      <span>Snapshot of public market data only. Not financial advice. Not affiliated with Kalshi or Polymarket.</span>
+      <span><a href="https://github.com/bprakashputta/predmarket-mcp">Source</a> · <a href="data.json">data.json</a> · MIT</span>
+    </div>
+  </footer>
+
+  <div class="tip" id="tip" role="tooltip" hidden></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

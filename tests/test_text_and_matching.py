@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from predmarket_mcp.matching import compatible, match_markets
+from predmarket_mcp.matching import compatible, incompatibility_reason, match_markets, near_misses
 from predmarket_mcp.models import Market, Venue
 from predmarket_mcp.text import InvertedIndex, jaccard, tokens
 
@@ -140,3 +140,66 @@ def test_match_is_one_to_one():
 )
 def test_compatible_rejects_lookalikes_with_different_terms(kalshi, polymarket, same):
     assert compatible(kalshi, polymarket) is same
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "reason"),
+    [
+        (
+            "Will the upper bound of the federal funds rate be above 3.50% following the "
+            "Fed's Dec 9, 2026 meeting?",
+            "Will the upper bound of the target federal funds rate be 3.0% at the end of 2026?",
+            "different threshold: 3.50% vs 3.0%",
+        ),
+        (
+            "Will the upper bound of the federal funds rate be above 3.75% following the "
+            "Fed's Dec 9, 2026 meeting?",
+            "Will the upper bound of the target federal funds rate be 3.75% at the end of 2026?",
+            "different comparison: above vs exactly 3.75%",
+        ),
+        (
+            "When will the next U.S. recession start? (Before 2027)",
+            "US recession by end of 2026?",
+            "different year: 2027 vs 2026",
+        ),
+        (
+            "Will the Federal Reserve Cut rates by 25bps at their December meeting?",
+            "Will the Fed increase interest rates by 25 bps after the December meeting?",
+            "opposite direction: cut vs increase",
+        ),
+        (
+            "Who will dissent at the December 2026 FOMC meeting? (Jerome Powell)",
+            "Jerome Powell out from Fed Board by December 31?",
+            "only names or dates in common, no shared action word",
+        ),
+        (
+            "Will the Federal Reserve Hike rates by >25bps at their next meeting?",
+            "Another Fed rate hike in 2026?",
+            "threshold on one side only: 25bps",
+        ),
+        (
+            "Will a government shutdown happen in 2026?",
+            "Will no government shutdown happen in 2026?",
+            "negated on one side only (second says no/not)",
+        ),
+        ("Will there be a recession in 2027?", "US recession by end of 2027?", None),
+    ],
+)
+def test_incompatibility_reason_explains_the_refusal(a, b, reason):
+    assert incompatibility_reason(a, b) == reason
+    assert compatible(a, b) is (reason is None)
+
+
+def test_near_misses_lists_refused_lookalikes_with_reasons():
+    k = [
+        mk(Venue.KALSHI, "K1", "Will the Fed cut rates by 25bps in December 2026?"),
+        mk(Venue.KALSHI, "K2", "Will there be a recession in 2027?"),
+    ]
+    p = [
+        mk(Venue.POLYMARKET, "P1", "Will the Fed cut rates by 50bps in December 2026?"),
+        mk(Venue.POLYMARKET, "P2", "US recession by end of 2027?"),
+    ]
+    misses = near_misses(k, p, min_similarity=0.3)
+    assert [(n.kalshi.id, n.polymarket.id) for n in misses] == [("K1", "P1")]
+    assert misses[0].reason == "different threshold: 25bps vs 50bps"
+    assert [m.kalshi.id for m in match_markets(k, p)] == ["K2"]

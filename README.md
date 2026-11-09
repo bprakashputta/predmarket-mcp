@@ -4,6 +4,8 @@
 
 **An MCP server that gives AI agents live prediction-market data from Kalshi and Polymarket.**
 
+**[Live board →](https://bprakashputta.github.io/predmarket-mcp/)** Markets that ask the same question on both venues, the price gap between them, and the look-alikes the matcher refused. Rebuilt from the live APIs every 6 hours by [`scripts/build_dashboard.py`](scripts/build_dashboard.py).
+
 Ask Claude (or any MCP client) things like *"What are the odds of a US recession in 2027 on Kalshi vs Polymarket?"* or *"Show me the order book and last day of trading for the December Fed cut market"*. The agent calls these tools, gets clean venue-neutral data and answers with real numbers.
 
 - **6 read-only tools:** search, quote, order book, recent trades, price history and cross-venue comparison
@@ -111,6 +113,10 @@ uv run python examples/client.py "fed rate"
 uv sync
 uv run pytest          # no network: HTTP is mocked with respx
 uv run ruff check .
+
+# the live board: build a snapshot from the real APIs, then serve site/
+uv run python scripts/build_dashboard.py --out site/data.json
+python3 -m http.server -d site 8000
 ```
 
 ## Limitations
