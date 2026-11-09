@@ -8,9 +8,9 @@
   <meta name="color-scheme" content="light dark">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=Red+Hat+Mono:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="style.css">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f5f2eb'/%3E%3Cpath d='M6 16h20' stroke='%2317160f' stroke-width='2'/%3E%3Ccircle cx='9' cy='16' r='4' fill='%2312876f'/%3E%3Ccircle cx='23' cy='16' r='4' fill='%233b5bdb'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230b0b0c'/%3E%3Crect x='5' y='8' width='10' height='16' fill='%230a8f6a'/%3E%3Crect x='17' y='8' width='10' height='16' fill='%232e5bff'/%3E%3C/svg%3E">
   <script>
     // ?theme=dark|light pins the theme (used for screenshots); otherwise follow the OS
     try { const t = new URLSearchParams(location.search).get("theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}
@@ -19,29 +19,36 @@
 <body>
   <a class="skip" href="#pairs">Skip to the pairs</a>
 
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="./"><b>predmarket-mcp</b><span class="slash">/</span><span>Cross-venue board</span></a>
+  <header class="strip">
+    <div class="wrap bar">
+      <a class="brand" href="./"><span class="mark" aria-hidden="true"><i class="k"></i><i class="p"></i></span><b>predmarket</b><span class="sub">Cross-venue board</span></a>
       <nav aria-label="Links">
         <a href="https://github.com/bprakashputta/predmarket-mcp">Code<span class="hide-sm"> on GitHub</span></a>
         <a href="https://bprakashputta.github.io/work/predmarket-mcp.html">Case study</a>
         <a href="https://bprakashputta.github.io" class="hide-sm">Portfolio</a>
       </nav>
     </div>
+    <div class="ticker-row">
+      <div class="wrap">
+        <p class="ticker" id="stamp"><span class="led" aria-hidden="true"></span><span class="tk-item">Loading snapshot…</span></p>
+      </div>
+    </div>
   </header>
 
-  <main>
-    <section class="hero wrap">
-      <p class="label eyebrow">Kalshi <span aria-hidden="true">×</span> Polymarket · live public data</p>
-      <h1 class="display">The same question, priced by two <em>markets</em>.</h1>
-      <div class="hero-grid">
-        <p class="dek">Every few hours this board searches both venues for the same topics, pairs markets that ask the same thing, and shows where their prices disagree. It also shows the pairs that only looked alike, and why the matcher turned them down.</p>
-        <p class="stamp mono" id="stamp"><span class="pulse" aria-hidden="true"></span><span>Loading snapshot…</span></p>
+  <main class="wrap">
+    <section class="intro" aria-labelledby="title">
+      <div>
+        <h1 id="title">Kalshi vs Polymarket, same question</h1>
+        <p class="dek">Both venues are searched for the same topics every 6 hours. Markets that ask the same thing are paired and their YES prices placed on one 0–100¢ ladder, so the gap is visible. Look-alikes that fail a matching rule are listed below with the reason.</p>
+      </div>
+      <div class="legend" aria-label="Legend">
+        <span><i class="vb k" aria-hidden="true">K</i>Kalshi</span>
+        <span><i class="vb p" aria-hidden="true">P</i>Polymarket</span>
       </div>
     </section>
 
-    <section class="wrap" aria-label="Snapshot summary">
-      <dl class="proof" id="proof">
+    <section aria-label="Snapshot summary">
+      <dl class="kpis" id="proof">
         <div><dt>Matched pairs</dt><dd>–</dd></div>
         <div><dt>Median gap</dt><dd>–</dd></div>
         <div><dt>Widest gap</dt><dd>–</dd></div>
@@ -50,92 +57,75 @@
       </dl>
     </section>
 
-    <section class="section wrap" id="pairs" aria-labelledby="pairs-h">
-      <div class="section-head">
-        <p class="label">01 · Matched pairs</p>
-        <div>
-          <h2 id="pairs-h">Where the two venues <em>disagree</em></h2>
-          <p>Each row is one question as Kalshi and Polymarket word it. Dots sit on one shared scale, the YES probability. Open a row for seven days of prices on both venues.</p>
-        </div>
+    <section class="panel" id="pairs" aria-labelledby="pairs-h">
+      <div class="panel-head">
+        <h2 id="pairs-h">Matched pairs</h2>
+        <form class="filters" id="filters" role="search" aria-label="Filter pairs" onsubmit="return false">
+          <label class="field">
+            <span>Topic</span>
+            <select id="f-topic"><option value="">All topics</option></select>
+          </label>
+          <label class="field grow">
+            <span>Search</span>
+            <input id="f-q" type="search" placeholder="recession, bitcoin, fed…" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>Sort</span>
+            <select id="f-sort">
+              <option value="gap">Largest gap</option>
+              <option value="sim">Closest wording</option>
+              <option value="close">Closing soonest</option>
+            </select>
+          </label>
+        </form>
       </div>
-
-      <form class="filters" id="filters" role="search" aria-label="Filter pairs" onsubmit="return false">
-        <label class="field">
-          <span class="label">Topic</span>
-          <select id="f-topic"><option value="">All topics</option></select>
-        </label>
-        <label class="field grow">
-          <span class="label">Search</span>
-          <input id="f-q" type="search" placeholder="e.g. recession, bitcoin, Oldham" autocomplete="off" spellcheck="false">
-        </label>
-        <label class="field">
-          <span class="label">Sort</span>
-          <select id="f-sort">
-            <option value="gap">Largest gap</option>
-            <option value="sim">Closest wording</option>
-            <option value="close">Closing soonest</option>
-          </select>
-        </label>
-        <div class="legend" aria-label="Legend">
-          <span><i class="dot k" aria-hidden="true"></i>Kalshi</span>
-          <span><i class="dot p" aria-hidden="true"></i>Polymarket</span>
-        </div>
-      </form>
 
       <div class="board" id="board" aria-live="polite">
         <div class="board-head" aria-hidden="true">
-          <span class="label">Topic</span>
-          <span class="label">Question, as each venue words it</span>
-          <span class="axis-head"><span class="label">YES price</span><span class="ticks mono"><i>0</i><i>25</i><i>50</i><i>75</i><i>100%</i></span></span>
-          <span class="label num">Gap</span>
-          <span class="label num">Volume</span>
+          <span>Topic</span>
+          <span>Contract, as each venue words it</span>
+          <span class="num">YES</span>
+          <span class="axis-head"><span>Spread ladder</span><span class="ticks"><i>0¢</i><i>25</i><i>50</i><i>75</i><i>100¢</i></span></span>
+          <span class="num">Gap</span>
+          <span class="num">Volume</span>
         </div>
         <ol class="rows" id="rows"></ol>
-        <p class="board-foot mono" id="board-foot"></p>
+        <p class="board-foot" id="board-foot"></p>
       </div>
     </section>
 
-    <section class="section wrap" id="refused" aria-labelledby="refused-h">
-      <div class="section-head">
-        <p class="label">02 · Refused</p>
-        <div>
-          <h2 id="refused-h">Look-alikes the matcher <em>refused</em></h2>
-          <p>These titles share most of their words, enough to pass a similarity test. Each one asks a different question, though, so pairing them would show a gap that means nothing. The reason is the first rule each pair failed.</p>
-        </div>
+    <section class="panel" id="refused" aria-labelledby="refused-h">
+      <div class="panel-head">
+        <h2 id="refused-h">Refused look-alikes</h2>
+        <p class="panel-note">Titles that share most of their words but ask a different question. Pairing them would show a gap that means nothing. Each row shows the first rule it failed.</p>
       </div>
       <div class="table-scroll">
         <table class="refused" id="refused-table">
-          <thead><tr><th scope="col">Kalshi</th><th scope="col">Polymarket</th><th scope="col">Why not</th><th scope="col" class="num">Overlap</th></tr></thead>
+          <thead><tr><th scope="col">Kalshi</th><th scope="col">Polymarket</th><th scope="col">Rule failed</th><th scope="col" class="num">Overlap</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
     </section>
 
-    <section class="section wrap method" aria-labelledby="method-h">
-      <div class="section-head">
-        <p class="label">03 · Method</p>
-        <div><h2 id="method-h">How a pair gets <em>made</em></h2></div>
-      </div>
-      <div class="principles">
-        <div>
-          <p class="n mono">01</p>
+    <section class="panel method" aria-labelledby="method-h">
+      <div class="panel-head"><h2 id="method-h">How a pair is made</h2></div>
+      <ol class="steps">
+        <li>
           <h3>Search the same words</h3>
           <p>Each topic runs through both venues' public search. Titles are tokenized, stop words dropped, and long forms folded together ("Federal Reserve" → <code>fed</code>).</p>
-        </div>
-        <div>
-          <p class="n mono">02</p>
+        </li>
+        <li>
           <h3>Score by rare words</h3>
           <p>Similarity is Jaccard weighted by how rare each word is in the result set, so "nominee" counts for more than "2026". Pairs are one-to-one.</p>
-        </div>
-        <div>
-          <p class="n mono">03</p>
+        </li>
+        <li>
           <h3>Refuse look-alikes</h3>
           <p>Twelve rules make a pair agree on dates, place, stage (nominee vs confirmed), thresholds, direction, negation and more. Close times must line up too. Each rule has a regression test built from real titles.</p>
-        </div>
-      </div>
+        </li>
+      </ol>
       <div class="caveats">
-        <p class="callout"><span class="label">Read before trading</span>A gap is not an arbitrage. Venues define and resolve events differently: being nominated isn't being confirmed, a price on one date isn't a price on another, and fees, limits and settlement differ. Use a pair as a lead, then read both rule books.</p>
-        <p class="topics mono" id="topics"></p>
+        <p class="callout"><b>A gap is not an arbitrage.</b> Venues define and resolve events differently: being nominated isn't being confirmed, a price on one date isn't a price on another, and fees, limits and settlement differ. Use a pair as a lead, then read both rule books.</p>
+        <p class="topics" id="topics"></p>
       </div>
     </section>
   </main>

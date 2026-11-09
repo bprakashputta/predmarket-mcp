@@ -12,9 +12,10 @@ const state = { data: null, topic: "", q: "", sort: "gap", open: new Set() };
 const $ = (s, el = document) => el.querySelector(s);
 
 // ---------- formatting ----------
+// prices are YES contract prices on a 0–100¢ scale (probability × 100)
 function pct(x) {
   if (x == null) return "–";
-  return (x * 100).toFixed(1) + "%";
+  return (x * 100).toFixed(1) + "¢";
 }
 function pts(gap) {
   if (gap == null) return "–";
@@ -98,25 +99,34 @@ function quoteTip(p) {
   return [
     el("div", { class: "when", text: "Quote at snapshot" }),
     ...VENUES.map((v) => tipRow(v, pct(p[v.key].mid), `bid ${pct(p[v.key].bid)} · ask ${pct(p[v.key].ask)}`)),
-    el("div", { class: "gapline" }, el("span", { text: "Gap (Poly − Kalshi)" }), el("b", { text: pts(p.gap) + " pts" })),
+    el("div", { class: "gapline" }, el("span", { text: "Gap (Poly − Kalshi)" }), el("b", { text: pts(p.gap) + "¢" })),
   ];
 }
 
-// ---------- header + proof ----------
+// ---------- status strip + KPIs ----------
+const utcFmt = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC", hour12: false });
 function renderHead(d) {
   const stamp = $("#stamp");
-  const t = el("time", { datetime: d.generated_at, title: d.generated_at.replace("T", " ").replace("Z", " UTC"), text: ago(d.generated_at) });
   const hours = (Date.now() - new Date(d.generated_at)) / 36e5;
   stamp.classList.toggle("ok", hours < 12);
   stamp.classList.toggle("stale", hours >= 12);
-  stamp.replaceChildren(el("span", { class: "pulse", "aria-hidden": "true" }), el("span", {}, "Snapshot · ", t, hours >= 12 ? " · refresh overdue" : " · refreshes every 6 h"));
-
   const s = d.summary, ms = d.markets_scanned;
+  const item = (k, ...v) => el("span", { class: "tk-item" }, el("span", { class: "k", text: k }), ...v);
+  const t = el("time", { datetime: d.generated_at, title: d.generated_at.replace("T", " ").replace("Z", " UTC"), text: utcFmt.format(new Date(d.generated_at)).toUpperCase() + " UTC" });
+  stamp.replaceChildren(el("span", { class: "led", "aria-hidden": "true" }),
+    item("Snapshot", t, " · " + ago(d.generated_at)),
+    hours >= 12 ? Object.assign(item("Refresh", el("b", { text: "overdue" })), { className: "tk-item warn" }) : item("Refresh", "every 6 h"),
+    item("Pairs", el("b", { text: String(s.pairs) })),
+    item("Scanned", el("b", { text: String(ms.kalshi + ms.polymarket) }), " ", el("span", { class: "vk", text: "K " + ms.kalshi }), " ", el("span", { class: "vp", text: "P " + ms.polymarket })),
+    item("Refused", el("b", { text: String(s.rejected) })),
+    item("Topics", el("b", { text: `${d.topics.filter((x) => x.pairs).length}/${d.topics.length}` })),
+    ...(d.errors && d.errors.length ? [item("Errors", el("b", { text: String(d.errors.length) }))] : []));
+
   const widest = d.pairs.reduce((a, p) => (p.gap != null && (!a || Math.abs(p.gap) > Math.abs(a.gap)) ? p : a), null);
   const cells = [
-    [String(s.pairs), null, "Matched pairs", `across ${d.topics.filter((t) => t.pairs).length} of ${d.topics.length} topics`],
-    [s.median_abs_gap == null ? "–" : (s.median_abs_gap * 100).toFixed(1), "pts", "Median gap", "absolute, Polymarket − Kalshi"],
-    [s.max_abs_gap == null ? "–" : (s.max_abs_gap * 100).toFixed(1), "pts", "Widest gap", widest ? widest.topic : ""],
+    [String(s.pairs), null, "Matched pairs", `across ${d.topics.filter((x) => x.pairs).length} of ${d.topics.length} topics`],
+    [s.median_abs_gap == null ? "–" : (s.median_abs_gap * 100).toFixed(1), "¢", "Median gap", "absolute, Polymarket − Kalshi"],
+    [s.max_abs_gap == null ? "–" : (s.max_abs_gap * 100).toFixed(1), "¢", "Widest gap", widest ? widest.topic : ""],
     [compact(ms.kalshi + ms.polymarket), null, "Markets scanned", `${ms.kalshi} Kalshi · ${ms.polymarket} Polymarket`],
     [String(s.rejected), null, "Look-alikes refused", "similar words, different question"],
   ];
@@ -125,11 +135,11 @@ function renderHead(d) {
 
   const sel = $("#f-topic");
   sel.replaceChildren(el("option", { value: "", text: `All topics (${d.pairs.length})` }),
-    ...d.topics.map((t) => el("option", { value: t.topic, disabled: t.pairs ? null : "", text: `${t.topic} (${t.pairs})` })));
+    ...d.topics.map((x) => el("option", { value: x.topic, disabled: x.pairs ? null : "", text: `${x.topic} (${x.pairs})` })));
   sel.value = state.topic;
 
-  $("#topics").replaceChildren(el("b", { text: "Topics scanned this run · " }),
-    ...d.topics.flatMap((t) => [el("span", { text: `${t.topic} ${t.pairs}` }), " "]));
+  $("#topics").replaceChildren(el("b", { text: "Topics this run" }),
+    ...d.topics.flatMap((x) => [el("span", { text: `${x.topic} ${x.pairs}` }), " "]));
 }
 
 // ---------- board ----------
@@ -155,7 +165,7 @@ function renderBoard() {
       state.topic = ""; state.q = ""; $("#f-q").value = ""; $("#f-topic").value = ""; renderBoard();
     }));
   } else rows.replaceChildren(...list.map(renderRow));
-  $("#board-foot").textContent = `Showing ${list.length} of ${state.data.pairs.length} pairs · gap = Polymarket mid − Kalshi mid, in percentage points · mid = (bid + ask) / 2, or the last trade when a side is empty`;
+  $("#board-foot").textContent = `Showing ${list.length} of ${state.data.pairs.length} pairs · gap = Polymarket mid − Kalshi mid, in cents on the 0–100¢ YES scale · mid = (bid + ask) / 2, or the last trade when a side is empty`;
 }
 
 function emptyState(title, body, action, onClick) {
@@ -172,30 +182,35 @@ function renderRow(p, i) {
   const li = el("li", { class: "row" + (open ? " open" : "") });
 
   const k = p.kalshi.mid, m = p.polymarket.mid;
-  const track = el("div", { class: "track", "aria-hidden": "true" }, el("i", { class: "base" }), el("i", { class: "tk", text: "0" }), el("i", { class: "tk r", text: "100%" }));
+  // spread ladder: both mids on one 0–100¢ rail; the band between them is the gap
+  const ladder = el("div", { class: "ladder", "aria-hidden": "true" }, el("i", { class: "rail" }),
+    el("i", { class: "q25" }), el("i", { class: "q50" }), el("i", { class: "q75" }),
+    el("i", { class: "tk", text: "0¢" }), el("i", { class: "tk r", text: "100¢" }));
   if (k != null && m != null) {
     const lo = Math.min(k, m), hi = Math.max(k, m);
-    track.append(el("i", { class: "seg", style: `left:${lo * 100}%;width:${(hi - lo) * 100}%` }));
+    ladder.append(el("i", { class: "band", style: `left:${lo * 100}%;width:${(hi - lo) * 100}%` }));
   }
-  for (const v of VENUES) if (p[v.key].mid != null) track.append(el("i", { class: "m " + v.cls, style: `left:${p[v.key].mid * 100}%` }));
+  for (const v of VENUES) if (p[v.key].mid != null) ladder.append(el("i", { class: "m " + v.cls, style: `left:${p[v.key].mid * 100}%` }));
 
   const fl = flags(p);
   const titles = el("div", { class: "titles" },
-    ...VENUES.map((v) => el("div", { class: "leg " + v.cls }, el("i", { class: "dot " + v.cls, "aria-hidden": "true" }),
-      el("span", { class: "t", title: p[v.key].title }, el("span", { class: "sr-only", text: v.name + ": " }), p[v.key].title),
-      el("span", { class: "v", text: pct(p[v.key].mid) }))),
+    ...VENUES.map((v) => el("div", { class: "leg " + v.cls }, el("i", { class: "vb " + v.cls, "aria-hidden": "true", text: v.name[0] }),
+      el("span", { class: "t", title: p[v.key].title }, el("span", { class: "sr-only", text: v.name + ": " }), p[v.key].title))),
     fl.length ? el("div", { class: "flags" }, ...fl.map((f) => el("span", { class: "flag", text: f }))) : null);
+  const quotes = el("div", { class: "quotes" }, ...VENUES.map((v) => el("span", { class: "q " + v.cls, text: pct(p[v.key].mid) })));
 
   const flat = p.gap == null || Math.abs(p.gap) < 0.01;
+  const side = p.gap == null ? "" : Math.abs(p.gap) < 0.0005 ? "level" : p.gap > 0 ? "Poly higher" : "Kalshi higher";
   const main = el("div", {
     class: "row-main", role: "button", tabindex: "0", "aria-expanded": String(open), "aria-controls": id,
-    "aria-label": `${p.topic}. Kalshi ${pct(k)}, ${p.kalshi.title}. Polymarket ${pct(m)}, ${p.polymarket.title}. Gap ${pts(p.gap)} points.${fl.length ? " Note: " + fl.join(", ") + "." : ""} ${open ? "Hide" : "Show"} price history.`,
+    "aria-label": `${p.topic}. Kalshi ${pct(k)}, ${p.kalshi.title}. Polymarket ${pct(m)}, ${p.polymarket.title}. Gap ${pts(p.gap)} cents.${fl.length ? " Note: " + fl.join(", ") + "." : ""} ${open ? "Hide" : "Show"} price history.`,
   },
-    el("span", { class: "topic" }, el("span", { class: "chev", "aria-hidden": "true", text: "▸" }), p.topic),
+    el("span", { class: "topic" }, el("span", { class: "chev", "aria-hidden": "true", text: "▶" }), p.topic),
     titles,
-    track,
-    el("span", { class: "gap" + (flat ? " flat" : "") }, pts(p.gap), el("small", { text: "pts" })),
-    el("span", { class: "vol" }, ...VENUES.map((v) => el("span", {}, el("i", { class: "dot " + v.cls, "aria-hidden": "true" }), vol(p[v.key])))));
+    quotes,
+    ladder,
+    el("span", { class: "gap" + (flat ? " flat" : "") }, pts(p.gap) + "¢", el("small", { text: side })),
+    el("span", { class: "vol" }, ...VENUES.map((v) => el("span", {}, el("i", { class: "sw " + v.cls, "aria-hidden": "true" }), el("span", { class: "sr-only", text: v.name + " volume " }), vol(p[v.key])))));
 
   const detail = el("div", { class: "detail", id, hidden: open ? null : "" });
   li.append(main, detail);
@@ -218,7 +233,7 @@ function renderRow(p, i) {
   // quote tooltip: hover anywhere on the row, or keyboard focus (anchored to the dumbbell)
   main.addEventListener("pointermove", (e) => { if (e.pointerType !== "touch") showTip(quoteTip(p), e.clientX, e.clientY); });
   main.addEventListener("pointerleave", hideTip);
-  main.addEventListener("focus", () => { const r = track.getBoundingClientRect(); showTip(quoteTip(p), r.left + r.width / 2, r.bottom); });
+  main.addEventListener("focus", () => { const r = ladder.getBoundingClientRect(); showTip(quoteTip(p), r.left + r.width / 2, r.bottom); });
   main.addEventListener("blur", hideTip);
   return li;
 }
@@ -226,22 +241,26 @@ function renderRow(p, i) {
 // ---------- detail: facts + 7-day chart ----------
 function renderDetail(detail, p) {
   if (!detail.firstChild) {
-    const facts = el("div", { class: "facts" }, ...VENUES.map((v) => {
-      const mk = p[v.key];
-      return el("section", { class: "venue" },
-        el("h3", {}, el("i", { class: "dot " + v.cls, "aria-hidden": "true" }), v.name),
-        mk.url ? el("a", { class: "q", href: mk.url, target: "_blank", rel: "noopener", text: mk.title + " ↗" }) : el("span", { class: "q", text: mk.title }),
-        el("dl", {},
-          el("div", {}, el("dt", { text: "Bid" }), el("dd", { text: pct(mk.bid) })),
-          el("div", {}, el("dt", { text: "Ask" }), el("dd", { text: pct(mk.ask) })),
-          el("div", {}, el("dt", { text: "Mid" }), el("dd", { text: pct(mk.mid) })),
-          el("div", { class: "wide" }, el("dt", { text: "Closes" }), el("dd", { text: fmtDate(mk.close_time) })),
-          el("div", { class: "wide" }, el("dt", { text: "Volume" }), el("dd", { text: mk.volume == null ? "–" : mk.volume_unit === "usd" ? "$" + compact(mk.volume) + " traded" : compact(mk.volume) + " contracts" }))));
-    }));
+    const cell = (t) => el("td", { text: t });
+    const facts = el("div", { class: "facts" },
+      el("table", { class: "quote-table" },
+        el("caption", { class: "sr-only", text: "Quotes at snapshot, cents" }),
+        el("thead", {}, el("tr", {}, ...["Venue", "Bid", "Ask", "Mid", "Volume"].map((h) => el("th", { scope: "col", text: h })))),
+        el("tbody", {}, ...VENUES.map((v) => {
+          const mk = p[v.key];
+          return el("tr", {}, el("th", { scope: "row" }, el("i", { class: "vb " + v.cls, "aria-hidden": "true", text: v.name[0] }), v.name),
+            cell(pct(mk.bid)), cell(pct(mk.ask)), cell(pct(mk.mid)), cell(vol(mk)));
+        }))),
+      el("ul", { class: "venue-links" }, ...VENUES.map((v) => {
+        const mk = p[v.key];
+        return el("li", {}, el("i", { class: "vb " + v.cls, "aria-hidden": "true", text: v.name[0] }),
+          el("span", {}, mk.url ? el("a", { href: mk.url, target: "_blank", rel: "noopener", text: mk.title + " ↗" }) : el("span", { text: mk.title }),
+            el("span", { class: "meta", text: "closes " + fmtDate(mk.close_time) + (mk.volume == null ? "" : mk.volume_unit === "usd" ? " · $" + compact(mk.volume) + " traded" : " · " + compact(mk.volume) + " contracts") })));
+      })));
     const chartWrap = el("div", { class: "chart-wrap" },
-      el("div", { class: "chart-head" }, el("p", { class: "label", text: "Last trade, every 3 h · 7 days" }), el("p", { class: "label", text: "word overlap " + Math.round(p.similarity * 100) + "%" })),
+      el("div", { class: "chart-head" }, el("p", { text: "Last trade · 3 h steps · 7 days" }), el("p", { text: "Word overlap " + Math.round(p.similarity * 100) + "%" })),
       el("div", { class: "chart-slot" }));
-    const caveat = el("p", { class: "callout" }, el("span", { class: "label", text: "Check the rules" }),
+    const caveat = el("p", { class: "callout" }, el("b", { text: "Check the rules. " }),
       "These two markets were paired on wording. Before reading the gap as mispricing, confirm both resolve on the same event, source and date. Venues often differ on all three.");
     detail.append(chartWrap, facts, caveat);
   }
@@ -282,7 +301,7 @@ function drawChart(slot, p) {
   const grid = el("svg:g", { class: "grid" }), axis = el("svg:g", { class: "axis" });
   for (let v = lo; v <= hi + 1e-9; v += step) {
     grid.append(el("svg:line", { x1: M.l, x2: M.l + iw, y1: y(v), y2: y(v) }));
-    axis.append(el("svg:text", { x: M.l - 8, y: y(v) + 3.5, "text-anchor": "end", text: v + (v === hi ? "%" : "") }));
+    axis.append(el("svg:text", { x: M.l - 8, y: y(v) + 3.5, "text-anchor": "end", text: v + (v === hi ? "¢" : "") }));
   }
   // day ticks at local midnight
   const d0 = new Date(start * 1000); d0.setHours(24, 0, 0, 0);
@@ -337,10 +356,10 @@ function drawChart(slot, p) {
       dots[i].setAttribute("cx", x(d[0])); dots[i].setAttribute("cy", y(d[1])); dots[i].setAttribute("visibility", far ? "hidden" : "visible");
       return { s, d, far };
     });
-    const rows = vals.filter(Boolean).map(({ s, d, far }) => tipRow(s, d[1].toFixed(1) + "%", far ? "last trade " + tipFmt.format(new Date(d[0] * 1000)) : null));
+    const rows = vals.filter(Boolean).map(({ s, d, far }) => tipRow(s, d[1].toFixed(1) + "¢", far ? "last trade " + tipFmt.format(new Date(d[0] * 1000)) : null));
     const both = vals.filter(Boolean);
     const content = [el("div", { class: "when", text: tipFmt.format(new Date(t * 1000)) }), ...rows];
-    if (both.length === 2) content.push(el("div", { class: "gapline" }, el("span", { text: "Gap" }), el("b", { text: pts((both[1].d[1] - both[0].d[1]) / 100) + " pts" })));
+    if (both.length === 2) content.push(el("div", { class: "gapline" }, el("span", { text: "Gap" }), el("b", { text: pts((both[1].d[1] - both[0].d[1]) / 100) + "¢" })));
     showTip(content, cx, cy);
   };
   const off = () => { cross.setAttribute("visibility", "hidden"); dots.forEach((d) => d.setAttribute("visibility", "hidden")); hideTip(); };
@@ -367,7 +386,7 @@ function drawChart(slot, p) {
   // the same numbers as a table, for screen readers
   const byT = new Map();
   series.forEach((s, i) => s.pts.forEach(([t, v]) => { const r = byT.get(t) || [null, null]; r[i] = v; byT.set(t, r); }));
-  const table = el("table", { class: "sr-only" }, el("caption", { text: "Seven-day YES price, percent" }),
+  const table = el("table", { class: "sr-only" }, el("caption", { text: "Seven-day YES price, cents" }),
     el("thead", {}, el("tr", {}, el("th", { scope: "col", text: "Time" }), ...series.map((s) => el("th", { scope: "col", text: s.name })))),
     el("tbody", {}, ...[...byT.entries()].sort((a, b) => a[0] - b[0]).map(([t, r]) => el("tr", {}, el("th", { scope: "row", text: tipFmt.format(new Date(t * 1000)) }), ...r.map((v) => el("td", { text: v == null ? "–" : v.toFixed(1) }))))));
   slot.append(table);
@@ -420,7 +439,7 @@ function renderRefused(d) {
   }
   tb.replaceChildren(...d.rejected.map((n) => {
     const { kind, detail } = parseReason(n.reason);
-    const cell = (v) => el("td", { class: "diff" }, el("i", { class: "dot " + v.cls, "aria-hidden": "true" }), el("span", { class: "sr-only", text: v.name + ": " }),
+    const cell = (v) => el("td", { class: "diff" }, el("i", { class: "sw " + v.cls, "aria-hidden": "true" }), el("span", { class: "sr-only", text: v.name + ": " }),
       n[v.key].url ? el("a", { href: n[v.key].url, target: "_blank", rel: "noopener" }, ...marked(n[v.key].title, kind, detail)) : el("span", {}, ...marked(n[v.key].title, kind, detail)));
     return el("tr", {}, cell(VENUES[0]), cell(VENUES[1]),
       el("td", {}, el("div", { class: "why" }, el("span", { class: "chip", title: n.reason }, el("b", { text: kind }), el("span", { text: detail })))),
@@ -463,7 +482,7 @@ async function boot() {
   } catch (err) {
     const stamp = $("#stamp");
     stamp.classList.add("stale");
-    stamp.replaceChildren(el("span", { class: "pulse", "aria-hidden": "true" }), el("span", { text: "Snapshot unavailable" }));
+    stamp.replaceChildren(el("span", { class: "led", "aria-hidden": "true" }), el("span", { class: "tk-item", text: "Snapshot unavailable" }));
     $("#rows").replaceChildren(emptyState("The snapshot didn't load.", `The board reads a JSON file built from the live venue APIs every 6 hours, and this time it couldn't be fetched (${err.message}). Nothing is shown rather than stale or made-up numbers.`, "Try again", () => boot()));
     $("#refused-table tbody").replaceChildren(el("tr", {}, el("td", { colspan: "4", text: "Waiting for the snapshot." })));
   } finally {
